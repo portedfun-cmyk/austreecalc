@@ -576,6 +576,140 @@ class _AusTreeCalcMainScreenState extends State<AusTreeCalcMainScreen> {
     );
   }
 
+  Future<void> _onExportWord() async {
+    if (_mainResult == null) return;
+    
+    final result = _mainResult!;
+    final treeLabel = _treeLabelController.text.trim().isEmpty ? 'Tree 1' : _treeLabelController.text.trim();
+    final siteLocation = _siteLocationController.text.trim();
+    final date = DateTime.now();
+    final dateStr = '${date.day}/${date.month}/${date.year}';
+    
+    final dbh = _parseNullable(_dbhController) ?? 0;
+    final height = _parseNullable(_heightController) ?? 0;
+    final crown = _parseNullable(_crownDiameterController) ?? 0;
+    final wind = _parseNullable(_designWindController) ?? 0;
+    final cavity = _parseNullable(_cavityController);
+    
+    final ratingLabel = As4970Language.safetyFactorRatingLabel(result.safetyFactor);
+    final ratingDetail = As4970Language.interpretSafetyFactorRange(result.safetyFactor);
+    final rootFactor = _computeRootPlateStabilityFactor();
+    final rootRating = _getRootPlateRiskRating();
+    
+    final sfColor = result.safetyFactor >= 1.5 ? '#22c55e' : result.safetyFactor >= 1.0 ? '#eab308' : '#ef4444';
+    
+    final html = '''
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AusTreeCalc Report - $treeLabel</title>
+  <style>
+    body { font-family: Calibri, Arial, sans-serif; margin: 40px; color: #333; }
+    h1 { color: #166534; border-bottom: 2px solid #166534; padding-bottom: 10px; }
+    h2 { color: #1e40af; margin-top: 30px; }
+    h3 { color: #6b7280; }
+    .header-info { background: #f3f4f6; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+    .safety-factor { font-size: 48px; font-weight: bold; color: $sfColor; }
+    .result-box { background: #f0fdf4; border: 2px solid #22c55e; padding: 20px; border-radius: 8px; margin: 20px 0; }
+    .warning-box { background: #fef3c7; border: 2px solid #f59e0b; padding: 15px; border-radius: 8px; margin: 20px 0; }
+    table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+    th, td { border: 1px solid #d1d5db; padding: 10px; text-align: left; }
+    th { background: #f3f4f6; }
+    .disclaimer { background: #fef2f2; border: 1px solid #fca5a5; padding: 15px; border-radius: 8px; margin-top: 30px; font-size: 12px; }
+    .section { margin-bottom: 30px; }
+  </style>
+</head>
+<body>
+  <h1>🌳 AusTreeCalc - Tree Stability Assessment Report</h1>
+  
+  <div class="header-info">
+    <strong>Tree ID:</strong> $treeLabel<br>
+    ${siteLocation.isNotEmpty ? '<strong>Location:</strong> $siteLocation<br>' : ''}
+    <strong>Assessment Date:</strong> $dateStr<br>
+    <strong>Species:</strong> ${_selectedSpecies.displayName}
+  </div>
+
+  <h2>📊 Summary Result</h2>
+  <div class="result-box">
+    <span class="safety-factor">${result.safetyFactor.toStringAsFixed(2)}</span>
+    <span style="font-size: 24px; margin-left: 20px;">$ratingLabel</span>
+    <p style="margin-top: 15px; color: #6b7280;">$ratingDetail</p>
+  </div>
+
+  <h2>📏 Tree Dimensions</h2>
+  <table>
+    <tr><th>Parameter</th><th>Value</th></tr>
+    <tr><td>DBH (Diameter at Breast Height)</td><td>${dbh.toStringAsFixed(1)} cm</td></tr>
+    <tr><td>Total Height</td><td>${height.toStringAsFixed(1)} m</td></tr>
+    <tr><td>Crown Diameter</td><td>${crown.toStringAsFixed(1)} m</td></tr>
+    ${cavity != null ? '<tr><td>Cavity Inner Diameter</td><td>${cavity.toStringAsFixed(1)} cm</td></tr>' : ''}
+  </table>
+
+  <h2>💨 Wind Loading Analysis</h2>
+  <table>
+    <tr><th>Parameter</th><th>Value</th></tr>
+    <tr><td>Design Wind Speed</td><td>${wind.toStringAsFixed(1)} m/s</td></tr>
+    <tr><td>Wind Pressure (q)</td><td>${(result.qPa / 1000).toStringAsFixed(2)} kPa</td></tr>
+    <tr><td>Wind Force on Crown (F)</td><td>${(result.windForceN / 1000).toStringAsFixed(2)} kN</td></tr>
+    <tr><td>Bending Moment at Base (M)</td><td>${(result.bendingMomentNm / 1000).toStringAsFixed(2)} kN·m</td></tr>
+    <tr><td>Bending Stress (σ)</td><td>${result.bendingStressMPa.toStringAsFixed(2)} MPa</td></tr>
+  </table>
+
+  ${_showRootPlateAnalysis ? '''
+  <h2>🌱 Root Plate Analysis</h2>
+  <table>
+    <tr><th>Parameter</th><th>Value</th></tr>
+    <tr><td>Soil Type</td><td>${_soilType.replaceAll('_', ' ')}</td></tr>
+    <tr><td>Soil Moisture</td><td>$_soilMoisture</td></tr>
+    <tr><td>Lean Angle</td><td>${_leanAngleDegrees.toStringAsFixed(0)}°</td></tr>
+    <tr><td>Root Plate Stability Factor</td><td>${rootFactor.toStringAsFixed(2)}</td></tr>
+    <tr><td>Risk Rating</td><td>$rootRating</td></tr>
+  </table>
+  ''' : ''}
+
+  <h2>📋 Technical Summary</h2>
+  <div class="section">
+    ${_shortSummary.trim().replaceAll('\n', '<br>')}
+  </div>
+
+  ${_windToFailureMs != null ? '''
+  <div class="warning-box">
+    <strong>⚠️ Wind-to-Failure Estimate:</strong> ${_windToFailureMs!.toStringAsFixed(1)} m/s<br>
+    <small>This is the estimated wind speed at which the safety factor approaches 1.0</small>
+  </div>
+  ''' : ''}
+
+  <h2>📝 Technical Appendix</h2>
+  <div class="section" style="font-family: monospace; font-size: 11px; white-space: pre-wrap; background: #f9fafb; padding: 15px; border-radius: 8px;">
+${_technicalAppendix.trim()}
+  </div>
+
+  <div class="disclaimer">
+    <strong>⚠️ Disclaimer:</strong> This assessment is based on a simplified static biomechanical model. 
+    Results are estimates only and should be combined with professional arborist judgement. 
+    This tool does not replace qualified tree risk assessment. 
+    The calculations are based on AS 4970-2009 principles but are not a certified engineering analysis.
+  </div>
+
+  <p style="color: #9ca3af; font-size: 11px; margin-top: 30px;">
+    Generated by AusTreeCalc | ${DateTime.now().toIso8601String()}
+  </p>
+</body>
+</html>
+''';
+
+    // For Flutter web, we'll copy to clipboard and show instructions
+    await Clipboard.setData(ClipboardData(text: html));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('HTML report copied! Paste into a .html file and open with Word.'),
+        duration: Duration(seconds: 4),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _treeLabelController.dispose();
@@ -2775,10 +2909,18 @@ SF = ${fb.toStringAsFixed(1)} × ${kDefect.toStringAsFixed(2)} / ${sigma.toStrin
                 OutlinedButton.icon(
                   onPressed: _mainResult == null ? null : _onExportJson,
                   icon: const Icon(Icons.download_rounded, size: 18),
-                  label: const Text('Export JSON'),
+                  label: const Text('JSON'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: Colors.white70,
                     side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: hasReport ? _onExportWord : null,
+                  icon: const Icon(Icons.description_outlined, size: 18),
+                  label: const Text('Word/HTML'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563eb),
                   ),
                 ),
               ],
