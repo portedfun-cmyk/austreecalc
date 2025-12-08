@@ -106,6 +106,21 @@ class _AusTreeCalcMainScreenState extends State<AusTreeCalcMainScreen> {
   double? _decayCriticalResidualPercent;
   double? _decayCriticalWallThicknessCm;
 
+  // Root plate analysis variables
+  bool _showRootPlateAnalysis = false;
+  String _soilType = 'clay_loam'; // sandy, clay, clay_loam, loam, organic, rocky
+  String _soilMoisture = 'moist'; // dry, moist, wet, waterlogged
+  double _leanAngleDegrees = 0.0;
+  bool _recentLeanChange = false;
+  bool _heavingCracking = false;
+  bool _severedRoots = false;
+  double _severedRootsPercent = 0.0;
+  bool _rootDecay = false;
+  bool _restrictedRootZone = false;
+  String _rootZoneRestriction = 'none'; // none, pavement, building, wall, excavation
+  final TextEditingController _rootPlateRadiusController = TextEditingController(text: '');
+  final TextEditingController _rootPlateDepthController = TextEditingController(text: '');
+
   @override
   void initState() {
     super.initState();
@@ -308,6 +323,143 @@ class _AusTreeCalcMainScreenState extends State<AusTreeCalcMainScreen> {
       k = 1.0;
     }
     return k;
+  }
+
+  /// Calculates a root plate stability factor based on soil conditions,
+  /// lean angle, root damage, and other root-zone factors.
+  /// Returns a value 0.0-1.0 where 1.0 = stable, lower = higher risk.
+  double _computeRootPlateStabilityFactor() {
+    if (!_showRootPlateAnalysis) return 1.0;
+    
+    double factor = 1.0;
+    
+    // Soil type factor - affects anchorage capacity
+    switch (_soilType) {
+      case 'rocky':
+        factor *= 1.1; // Rock provides excellent anchorage
+        break;
+      case 'clay':
+        factor *= 0.95; // Good when dry, poor when wet
+        break;
+      case 'clay_loam':
+        factor *= 1.0; // Balanced
+        break;
+      case 'loam':
+        factor *= 0.95; // Good general soil
+        break;
+      case 'sandy':
+        factor *= 0.85; // Poor anchorage, prone to erosion
+        break;
+      case 'organic':
+        factor *= 0.75; // Soft, compressible, poor anchorage
+        break;
+    }
+    
+    // Soil moisture factor - wet soil reduces anchorage
+    switch (_soilMoisture) {
+      case 'dry':
+        factor *= 1.05; // Slightly better anchorage
+        break;
+      case 'moist':
+        factor *= 1.0; // Normal
+        break;
+      case 'wet':
+        factor *= 0.85; // Reduced anchorage
+        break;
+      case 'waterlogged':
+        factor *= 0.65; // Significantly reduced anchorage
+        break;
+    }
+    
+    // Lean angle factor - trees with significant lean are at higher risk
+    if (_leanAngleDegrees > 0) {
+      // Progressive reduction: 5° = minor, 10° = moderate, 15°+ = severe
+      if (_leanAngleDegrees <= 5) {
+        factor *= 0.95;
+      } else if (_leanAngleDegrees <= 10) {
+        factor *= 0.85;
+      } else if (_leanAngleDegrees <= 15) {
+        factor *= 0.70;
+      } else {
+        factor *= 0.50; // Severe lean - high risk
+      }
+    }
+    
+    // Recent lean change indicates active movement
+    if (_recentLeanChange) {
+      factor *= 0.70;
+    }
+    
+    // Heaving/cracking around base indicates root plate failure
+    if (_heavingCracking) {
+      factor *= 0.60;
+    }
+    
+    // Severed roots reduce anchorage proportionally
+    if (_severedRoots && _severedRootsPercent > 0) {
+      // Each 10% of roots severed = ~8% reduction in stability
+      final rootLoss = (_severedRootsPercent / 100.0) * 0.8;
+      factor *= (1.0 - rootLoss).clamp(0.3, 1.0);
+    }
+    
+    // Root decay reduces root plate integrity
+    if (_rootDecay) {
+      factor *= 0.75;
+    }
+    
+    // Restricted root zone limits root development
+    if (_restrictedRootZone) {
+      switch (_rootZoneRestriction) {
+        case 'pavement':
+          factor *= 0.85;
+          break;
+        case 'building':
+          factor *= 0.75;
+          break;
+        case 'wall':
+          factor *= 0.80;
+          break;
+        case 'excavation':
+          factor *= 0.65; // Recent excavation is most damaging
+          break;
+      }
+    }
+    
+    // Root plate dimensions factor (if provided)
+    final dbh = _parseNullable(_dbhController);
+    final rootRadius = _parseNullable(_rootPlateRadiusController);
+    final rootDepth = _parseNullable(_rootPlateDepthController);
+    
+    if (dbh != null && rootRadius != null && rootRadius > 0) {
+      // Expected root plate radius ≈ 3-4x DBH for most trees
+      final expectedRadius = (dbh / 100) * 3.5; // DBH in cm, radius in m
+      final radiusRatio = rootRadius / expectedRadius;
+      if (radiusRatio < 0.7) {
+        factor *= 0.75; // Undersized root plate
+      } else if (radiusRatio < 0.9) {
+        factor *= 0.90;
+      }
+    }
+    
+    if (rootDepth != null && rootDepth > 0) {
+      // Shallow root plates are less stable
+      if (rootDepth < 0.3) {
+        factor *= 0.70; // Very shallow
+      } else if (rootDepth < 0.5) {
+        factor *= 0.85;
+      }
+    }
+    
+    return factor.clamp(0.2, 1.1);
+  }
+
+  /// Returns overall stability assessment combining stem and root factors
+  String _getRootPlateRiskRating() {
+    final factor = _computeRootPlateStabilityFactor();
+    if (factor >= 0.9) return 'Low Risk';
+    if (factor >= 0.7) return 'Moderate Risk';
+    if (factor >= 0.5) return 'High Risk';
+    return 'Critical Risk';
   }
 
   Map<String, dynamic> _buildExportPayload() {
@@ -840,48 +992,90 @@ class _AusTreeCalcMainScreenState extends State<AusTreeCalcMainScreen> {
     final theme = Theme.of(context);
     final speciesList = SpeciesPresets.list;
     final windList = WindPresets.list;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 600;
+    final isTablet = screenWidth >= 600 && screenWidth < 900;
+    final horizontalPadding = isMobile ? 12.0 : isTablet ? 24.0 : 48.0;
+    final maxContentWidth = 800.0;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('AusTreeCalc – Advanced Tree Stability Modeller'),
+        title: Text(
+          isMobile ? 'AusTreeCalc' : 'AusTreeCalc – Advanced Tree Stability Modeller',
+          style: TextStyle(fontSize: isMobile ? 18 : 22),
+        ),
       ),
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
             return SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: constraints.maxHeight - 32,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _buildTreeInputsCard(theme, speciesList),
-                    const SizedBox(height: 12),
-                    _buildWindInputsCard(theme, windList),
-                    const SizedBox(height: 12),
-                    _buildValidationCard(theme),
-                    const SizedBox(height: 12),
-                    _buildResultsCard(theme),
-                    const SizedBox(height: 12),
-                    _buildDecayCard(theme),
-                    const SizedBox(height: 12),
-                    _buildLiveSimulatorCard(theme),
-                    const SizedBox(height: 12),
-                    _buildPruningCard(theme),
-                    const SizedBox(height: 12),
-                    _buildReportCard(theme),
-                    const SizedBox(height: 12),
-                    _buildMethodologyCard(theme),
-                    const SizedBox(height: 16),
-                  ],
+              padding: EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: 16),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: maxContentWidth,
+                    minHeight: constraints.maxHeight - 32,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildTreeInputsCard(theme, speciesList),
+                      const SizedBox(height: 12),
+                      _buildWindInputsCard(theme, windList),
+                      const SizedBox(height: 12),
+                      _buildValidationCard(theme),
+                      const SizedBox(height: 12),
+                      _buildResultsCard(theme),
+                      const SizedBox(height: 12),
+                      _buildDecayCard(theme),
+                      const SizedBox(height: 12),
+                      _buildRootPlateCard(theme),
+                      const SizedBox(height: 12),
+                      _buildLiveSimulatorCard(theme),
+                      const SizedBox(height: 12),
+                      _buildPruningCard(theme),
+                      const SizedBox(height: 12),
+                      _buildReportCard(theme),
+                      const SizedBox(height: 12),
+                      _buildMethodologyCard(theme),
+                      const SizedBox(height: 16),
+                    ],
+                  ),
                 ),
               ),
             );
           },
         ),
       ),
+    );
+  }
+
+  /// Builds a responsive row that stacks to column on mobile
+  Widget _buildResponsiveRow(BuildContext context, List<Widget> children) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isMobile = screenWidth < 600;
+    
+    if (isMobile) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: children.map((child) => Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: child,
+        )).toList(),
+      );
+    }
+    
+    return Row(
+      children: children.asMap().entries.map((entry) {
+        final index = entry.key;
+        final child = entry.value;
+        return Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(left: index > 0 ? 12 : 0),
+            child: child,
+          ),
+        );
+      }).toList(),
     );
   }
 
@@ -933,65 +1127,47 @@ class _AusTreeCalcMainScreenState extends State<AusTreeCalcMainScreen> {
               },
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _dbhController,
-                    decoration: const InputDecoration(
-                      labelText: 'DBH (cm)',
-                      hintText: 'e.g. 50',
-                    ),
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    onChanged: (_) => _revalidate(),
-                  ),
+            _buildResponsiveRow(context, [
+              TextField(
+                controller: _dbhController,
+                decoration: const InputDecoration(
+                  labelText: 'DBH (cm)',
+                  hintText: 'e.g. 50',
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextField(
-                    controller: _heightController,
-                    decoration: const InputDecoration(
-                      labelText: 'Height (m)',
-                      hintText: 'e.g. 18',
-                    ),
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    onChanged: (_) => _revalidate(),
-                  ),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (_) => _revalidate(),
+              ),
+              TextField(
+                controller: _heightController,
+                decoration: const InputDecoration(
+                  labelText: 'Height (m)',
+                  hintText: 'e.g. 18',
                 ),
-              ],
-            ),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (_) => _revalidate(),
+              ),
+            ]),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _crownDiameterController,
-                    decoration: const InputDecoration(
-                      labelText: 'Crown diameter (m)',
-                      hintText: 'e.g. 10',
-                    ),
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    onChanged: (_) => _revalidate(),
-                  ),
+            _buildResponsiveRow(context, [
+              TextField(
+                controller: _crownDiameterController,
+                decoration: const InputDecoration(
+                  labelText: 'Crown diameter (m)',
+                  hintText: 'e.g. 10',
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextField(
-                    controller: _cavityController,
-                    decoration: const InputDecoration(
-                      labelText: 'Cavity inner diameter (cm)',
-                      hintText: 'optional',
-                    ),
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    onChanged: (_) => _revalidate(),
-                  ),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (_) => _revalidate(),
+              ),
+              TextField(
+                controller: _cavityController,
+                decoration: const InputDecoration(
+                  labelText: 'Cavity inner diameter (cm)',
+                  hintText: 'optional',
                 ),
-              ],
-            ),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (_) => _revalidate(),
+              ),
+            ]),
             const SizedBox(height: 8),
             Row(
               children: [
@@ -2061,6 +2237,268 @@ Moment M = ${(F/1000).toStringAsFixed(2)} × ${height.toStringAsFixed(1)} × 0.7
 Section modulus Z (solid) = π/32 × ${(D*1000).toStringAsFixed(0)}³ = ${(Z/1000).toStringAsFixed(0)} cm³
 Bending stress σ = ${(M/1000).toStringAsFixed(2)} / ${(Z/1e6).toStringAsFixed(4)} = ${sigma.toStringAsFixed(2)} MPa
 SF = ${fb.toStringAsFixed(1)} × ${kDefect.toStringAsFixed(2)} / ${sigma.toStringAsFixed(2)} = ${SF.toStringAsFixed(2)}''';
+  }
+
+  Widget _buildRootPlateCard(ThemeData theme) {
+    final rootFactor = _computeRootPlateStabilityFactor();
+    final riskRating = _getRootPlateRiskRating();
+    final riskColor = rootFactor >= 0.9 ? const Color(0xFF4ade80)
+        : rootFactor >= 0.7 ? const Color(0xFFfbbf24)
+        : rootFactor >= 0.5 ? const Color(0xFFfb923c)
+        : const Color(0xFFef4444);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: _buildModernCardHeader('Root Plate Analysis', Icons.grass_rounded, const Color(0xFF8b5cf6), subtitle: 'Anchorage stability'),
+                ),
+                Switch(
+                  value: _showRootPlateAnalysis,
+                  activeColor: const Color(0xFF8b5cf6),
+                  onChanged: (val) => setState(() => _showRootPlateAnalysis = val),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (!_showRootPlateAnalysis)
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.03),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline_rounded, color: Colors.white.withOpacity(0.4)),
+                    const SizedBox(width: 12),
+                    Expanded(child: Text('Enable to assess root plate stability', style: TextStyle(color: Colors.white.withOpacity(0.5)))),
+                  ],
+                ),
+              )
+            else ...[
+              // Risk rating display
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: [riskColor.withOpacity(0.15), riskColor.withOpacity(0.05)]),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: riskColor.withOpacity(0.3)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: riskColor.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(Icons.foundation_rounded, color: riskColor, size: 28),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(riskRating, style: TextStyle(color: riskColor, fontWeight: FontWeight.w700, fontSize: 18)),
+                          const SizedBox(height: 4),
+                          Text('Stability Factor: ${rootFactor.toStringAsFixed(2)}', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              
+              // Soil conditions
+              Text('Soil Type', style: TextStyle(color: Colors.white.withOpacity(0.8), fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _buildSoilChip('Rocky', 'rocky', Icons.terrain),
+                  _buildSoilChip('Clay', 'clay', Icons.layers),
+                  _buildSoilChip('Clay Loam', 'clay_loam', Icons.landscape),
+                  _buildSoilChip('Loam', 'loam', Icons.eco),
+                  _buildSoilChip('Sandy', 'sandy', Icons.grain),
+                  _buildSoilChip('Organic', 'organic', Icons.compost),
+                ],
+              ),
+              const SizedBox(height: 16),
+              
+              Text('Soil Moisture', style: TextStyle(color: Colors.white.withOpacity(0.8), fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _buildMoistureChip('Dry', 'dry'),
+                  _buildMoistureChip('Moist', 'moist'),
+                  _buildMoistureChip('Wet', 'wet'),
+                  _buildMoistureChip('Waterlogged', 'waterlogged'),
+                ],
+              ),
+              const SizedBox(height: 20),
+              
+              // Lean angle
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Lean Angle: ${_leanAngleDegrees.toStringAsFixed(0)}°', style: TextStyle(color: Colors.white.withOpacity(0.8))),
+                        Slider(
+                          value: _leanAngleDegrees,
+                          min: 0,
+                          max: 25,
+                          divisions: 25,
+                          onChanged: (v) => setState(() => _leanAngleDegrees = v),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              
+              // Checkboxes for conditions
+              _buildRootCheckbox('Recent lean change observed', _recentLeanChange, (v) => setState(() => _recentLeanChange = v ?? false)),
+              _buildRootCheckbox('Heaving/cracking around base', _heavingCracking, (v) => setState(() => _heavingCracking = v ?? false)),
+              _buildRootCheckbox('Root decay present', _rootDecay, (v) => setState(() => _rootDecay = v ?? false)),
+              
+              // Severed roots
+              _buildRootCheckbox('Severed/damaged roots', _severedRoots, (v) => setState(() => _severedRoots = v ?? false)),
+              if (_severedRoots) ...[
+                Padding(
+                  padding: const EdgeInsets.only(left: 32),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('% of roots affected: ${_severedRootsPercent.toStringAsFixed(0)}%', style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 13)),
+                      Slider(
+                        value: _severedRootsPercent,
+                        min: 0,
+                        max: 80,
+                        divisions: 16,
+                        onChanged: (v) => setState(() => _severedRootsPercent = v),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              
+              // Restricted root zone
+              _buildRootCheckbox('Restricted root zone', _restrictedRootZone, (v) => setState(() => _restrictedRootZone = v ?? false)),
+              if (_restrictedRootZone) ...[
+                Padding(
+                  padding: const EdgeInsets.only(left: 32, top: 8),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _buildRestrictionChip('Pavement', 'pavement'),
+                      _buildRestrictionChip('Building', 'building'),
+                      _buildRestrictionChip('Wall', 'wall'),
+                      _buildRestrictionChip('Excavation', 'excavation'),
+                    ],
+                  ),
+                ),
+              ],
+              
+              const SizedBox(height: 16),
+              // Optional measurements
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _rootPlateRadiusController,
+                      decoration: const InputDecoration(
+                        labelText: 'Root plate radius (m)',
+                        hintText: 'e.g. 3.5',
+                      ),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _rootPlateDepthController,
+                      decoration: const InputDecoration(
+                        labelText: 'Root plate depth (m)',
+                        hintText: 'e.g. 0.6',
+                      ),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSoilChip(String label, String value, IconData icon) {
+    final selected = _soilType == value;
+    return ChoiceChip(
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: selected ? Colors.white : Colors.white54),
+          const SizedBox(width: 6),
+          Text(label),
+        ],
+      ),
+      selected: selected,
+      onSelected: (sel) => setState(() => _soilType = value),
+      selectedColor: const Color(0xFF8b5cf6),
+    );
+  }
+
+  Widget _buildMoistureChip(String label, String value) {
+    final selected = _soilMoisture == value;
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (sel) => setState(() => _soilMoisture = value),
+      selectedColor: const Color(0xFF22d3ee),
+    );
+  }
+
+  Widget _buildRestrictionChip(String label, String value) {
+    final selected = _rootZoneRestriction == value;
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (sel) => setState(() => _rootZoneRestriction = value),
+      selectedColor: const Color(0xFFfb923c),
+    );
+  }
+
+  Widget _buildRootCheckbox(String label, bool value, ValueChanged<bool?> onChanged) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Checkbox(
+            value: value,
+            onChanged: onChanged,
+            activeColor: const Color(0xFF8b5cf6),
+          ),
+          Expanded(child: Text(label, style: TextStyle(color: Colors.white.withOpacity(0.8)))),
+        ],
+      ),
+    );
   }
 
   Widget _buildLiveSimulatorCard(ThemeData theme) {
