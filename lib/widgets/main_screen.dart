@@ -121,6 +121,10 @@ class _AusTreeCalcMainScreenState extends State<AusTreeCalcMainScreen> {
   final TextEditingController _rootPlateRadiusController = TextEditingController(text: '');
   final TextEditingController _rootPlateDepthController = TextEditingController(text: '');
 
+  // Risk matrix state
+  int _consequenceRating = 2; // 1=Negligible, 2=Minor, 3=Significant, 4=Severe
+  int _occupancyRating = 2; // 1=Rare, 2=Occasional, 3=Frequent, 4=Constant
+
   @override
   void initState() {
     super.initState();
@@ -656,6 +660,8 @@ class _AusTreeCalcMainScreenState extends State<AusTreeCalcMainScreen> {
     <tr><td>Bending Stress (σ)</td><td>${result.bendingStressMPa.toStringAsFixed(2)} MPa</td></tr>
   </table>
 
+  ${_buildDefectHtmlSection()}
+
   ${_showRootPlateAnalysis ? '''
   <h2>🌱 Root Plate Analysis</h2>
   <table>
@@ -708,6 +714,48 @@ ${_technicalAppendix.trim()}
         duration: Duration(seconds: 4),
       ),
     );
+  }
+
+  String _buildDefectHtmlSection() {
+    final defects = <String>[];
+    final defectFactor = _computeDefectStrengthFactor();
+    
+    if (_defectBracketFungi) defects.add('Bracket fungi / conks present');
+    if (_defectCavityDecay) defects.add('Cavity / internal decay');
+    if (_defectCracks) defects.add('Longitudinal cracks');
+    if (_defectBasalDecay) defects.add('Basal / root-plate decay');
+    if (_defectUnion) defects.add('Included bark / co-dominant unions');
+    if (_defectOtherController.text.trim().isNotEmpty) defects.add('Other: ${_defectOtherController.text.trim()}');
+    
+    if (defects.isEmpty && !_showAdvancedDecay) {
+      return '';
+    }
+    
+    final advancedRows = <String>[];
+    if (_showAdvancedDecay) {
+      advancedRows.add('<tr><td>Decay Type</td><td>${_decayType.replaceAll('_', ' ')}</td></tr>');
+      advancedRows.add('<tr><td>Decay Location</td><td>${_decayLocation.replaceAll('_', ' ')}</td></tr>');
+      if (_estimatedDecayExtentPercent > 0) {
+        advancedRows.add('<tr><td>Estimated Decay Extent</td><td>${_estimatedDecayExtentPercent.toStringAsFixed(0)}%</td></tr>');
+      }
+      if (_resonanceTestResult != 'not_done') {
+        advancedRows.add('<tr><td>Resonance Test Result</td><td>${_resonanceTestResult}</td></tr>');
+      }
+      final colHeight = double.tryParse(_decayColumnHeightController.text.trim());
+      if (colHeight != null && colHeight > 0) {
+        advancedRows.add('<tr><td>Decay Column Height</td><td>${colHeight.toStringAsFixed(1)} m</td></tr>');
+      }
+    }
+    
+    return '''
+  <h2>⚠️ Defect & Decay Assessment</h2>
+  <table>
+    <tr><th>Indicator</th><th>Status</th></tr>
+    ${defects.map((d) => '<tr><td>$d</td><td style="color: #dc2626;">Present</td></tr>').join('\n    ')}
+    ${advancedRows.join('\n    ')}
+    <tr style="background: #fef3c7;"><td><strong>Overall Defect Strength Factor</strong></td><td><strong>${defectFactor.toStringAsFixed(2)}</strong></td></tr>
+  </table>
+''';
   }
 
   @override
@@ -1160,6 +1208,8 @@ ${_technicalAppendix.trim()}
                       _buildValidationCard(theme),
                       const SizedBox(height: 12),
                       _buildResultsCard(theme),
+                      const SizedBox(height: 12),
+                      _buildRiskMatrixCard(theme),
                       const SizedBox(height: 12),
                       _buildDecayCard(theme),
                       const SizedBox(height: 12),
@@ -1936,6 +1986,232 @@ ${_technicalAppendix.trim()}
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildRiskMatrixCard(ThemeData theme) {
+    final result = _mainResult;
+    
+    // Calculate likelihood based on safety factor and root plate
+    int likelihood = 1; // Default: very unlikely
+    if (result != null) {
+      final sf = result.safetyFactor;
+      final rootFactor = _computeRootPlateStabilityFactor();
+      final combinedFactor = sf * rootFactor;
+      
+      if (combinedFactor < 0.8) likelihood = 4; // Almost certain
+      else if (combinedFactor < 1.0) likelihood = 3; // Probable
+      else if (combinedFactor < 1.5) likelihood = 2; // Possible
+      else likelihood = 1; // Unlikely
+    }
+    
+    // Risk score = likelihood × consequence × occupancy factor
+    final riskScore = likelihood * _consequenceRating * (_occupancyRating / 2.0);
+    String riskRating;
+    Color riskColor;
+    
+    if (riskScore <= 2) {
+      riskRating = 'LOW';
+      riskColor = const Color(0xFF22c55e);
+    } else if (riskScore <= 6) {
+      riskRating = 'MODERATE';
+      riskColor = const Color(0xFFeab308);
+    } else if (riskScore <= 12) {
+      riskRating = 'HIGH';
+      riskColor = const Color(0xFFf97316);
+    } else {
+      riskRating = 'EXTREME';
+      riskColor = const Color(0xFFef4444);
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildModernCardHeader('Risk Matrix', Icons.grid_view_rounded, const Color(0xFFa855f7), subtitle: 'QTRA-style assessment'),
+            const SizedBox(height: 16),
+            
+            if (result == null)
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.03),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline_rounded, color: Colors.white.withOpacity(0.4)),
+                    const SizedBox(width: 12),
+                    Expanded(child: Text('Calculate first to see risk matrix', style: TextStyle(color: Colors.white.withOpacity(0.5)))),
+                  ],
+                ),
+              )
+            else ...[
+              // Risk score display
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: [riskColor.withOpacity(0.2), riskColor.withOpacity(0.05)]),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: riskColor.withOpacity(0.4)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: riskColor,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(riskRating, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Risk Score: ${riskScore.toStringAsFixed(1)}', style: TextStyle(color: Colors.white.withOpacity(0.9), fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 4),
+                          Text('Likelihood × Consequence × Occupancy', style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              
+              // Risk matrix grid
+              _buildRiskMatrixGrid(likelihood),
+              const SizedBox(height: 20),
+              
+              // Consequence selector
+              Text('Target Consequence', style: TextStyle(color: Colors.white.withOpacity(0.8), fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _buildConsequenceChip('Negligible', 1, Icons.check_circle_outline),
+                  _buildConsequenceChip('Minor', 2, Icons.warning_amber_rounded),
+                  _buildConsequenceChip('Significant', 3, Icons.report_problem_rounded),
+                  _buildConsequenceChip('Severe', 4, Icons.dangerous_rounded),
+                ],
+              ),
+              const SizedBox(height: 16),
+              
+              // Occupancy selector
+              Text('Target Occupancy', style: TextStyle(color: Colors.white.withOpacity(0.8), fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _buildOccupancyChip('Rare', 1),
+                  _buildOccupancyChip('Occasional', 2),
+                  _buildOccupancyChip('Frequent', 3),
+                  _buildOccupancyChip('Constant', 4),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRiskMatrixGrid(int currentLikelihood) {
+    const labels = ['Unlikely', 'Possible', 'Probable', 'Almost Certain'];
+    const consequenceLabels = ['Neg.', 'Minor', 'Signif.', 'Severe'];
+    
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.white.withOpacity(0.2)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        children: [
+          // Header row
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(7)),
+            ),
+            child: Row(
+              children: [
+                const SizedBox(width: 70, height: 30),
+                ...consequenceLabels.map((l) => Expanded(
+                  child: Center(child: Text(l, style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.6)))),
+                )),
+              ],
+            ),
+          ),
+          // Matrix rows
+          for (var row = 4; row >= 1; row--)
+            Row(
+              children: [
+                SizedBox(
+                  width: 70,
+                  height: 36,
+                  child: Center(child: Text(labels[row - 1], style: TextStyle(fontSize: 9, color: Colors.white.withOpacity(0.6)))),
+                ),
+                for (var col = 1; col <= 4; col++)
+                  Expanded(
+                    child: Container(
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: _getRiskCellColor(row, col),
+                        border: row == currentLikelihood && col == _consequenceRating
+                            ? Border.all(color: Colors.white, width: 2)
+                            : Border.all(color: Colors.white.withOpacity(0.1)),
+                      ),
+                      child: row == currentLikelihood && col == _consequenceRating
+                          ? const Center(child: Icon(Icons.close, color: Colors.white, size: 16))
+                          : null,
+                    ),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Color _getRiskCellColor(int likelihood, int consequence) {
+    final score = likelihood * consequence;
+    if (score <= 2) return const Color(0xFF22c55e).withOpacity(0.6);
+    if (score <= 4) return const Color(0xFF84cc16).withOpacity(0.6);
+    if (score <= 6) return const Color(0xFFeab308).withOpacity(0.6);
+    if (score <= 9) return const Color(0xFFf97316).withOpacity(0.6);
+    return const Color(0xFFef4444).withOpacity(0.6);
+  }
+
+  Widget _buildConsequenceChip(String label, int value, IconData icon) {
+    final selected = _consequenceRating == value;
+    return ChoiceChip(
+      label: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: selected ? Colors.white : Colors.white54),
+          const SizedBox(width: 4),
+          Text(label),
+        ],
+      ),
+      selected: selected,
+      onSelected: (sel) => setState(() => _consequenceRating = value),
+      selectedColor: const Color(0xFFa855f7),
+    );
+  }
+
+  Widget _buildOccupancyChip(String label, int value) {
+    final selected = _occupancyRating == value;
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (sel) => setState(() => _occupancyRating = value),
+      selectedColor: const Color(0xFF6366f1),
     );
   }
 

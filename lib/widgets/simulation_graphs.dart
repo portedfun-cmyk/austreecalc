@@ -2766,6 +2766,13 @@ class _LiveWindLoadSimulatorState extends State<LiveWindLoadSimulator>
   bool _showPruningComparison = false;
   double _crownReductionPercent = 20.0;
   
+  // Root plate visualization
+  bool _showRootPlate = false;
+  double _rootPlateStabilityFactor = 1.0;
+  String _soilType = 'clay_loam';
+  bool _hasRootDamage = false;
+  bool _hasHeaving = false;
+  
   late AnimationController _swayController;
   late AnimationController _failureController;
   late AnimationController _leafController;
@@ -3242,6 +3249,80 @@ class _LiveWindLoadSimulatorState extends State<LiveWindLoadSimulator>
                   ],
                 ),
               ],
+              const SizedBox(height: 8),
+              // Root plate visualization controls
+              Row(
+                children: [
+                  Checkbox(
+                    value: _showRootPlate,
+                    onChanged: (v) => setState(() => _showRootPlate = v ?? false),
+                  ),
+                  const Icon(Icons.grass, size: 18),
+                  const SizedBox(width: 4),
+                  const Text('Show root plate analysis'),
+                ],
+              ),
+              if (_showRootPlate) ...[
+                Padding(
+                  padding: const EdgeInsets.only(left: 24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Text('Soil type: ', style: TextStyle(fontSize: 13)),
+                          const SizedBox(width: 8),
+                          DropdownButton<String>(
+                            value: _soilType,
+                            isDense: true,
+                            items: const [
+                              DropdownMenuItem(value: 'clay_loam', child: Text('Clay Loam')),
+                              DropdownMenuItem(value: 'sandy', child: Text('Sandy')),
+                              DropdownMenuItem(value: 'clay', child: Text('Clay')),
+                              DropdownMenuItem(value: 'organic', child: Text('Organic')),
+                              DropdownMenuItem(value: 'rocky', child: Text('Rocky')),
+                            ],
+                            onChanged: (v) => setState(() => _soilType = v ?? 'clay_loam'),
+                          ),
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          const Text('Stability: ', style: TextStyle(fontSize: 13)),
+                          Expanded(
+                            child: Slider(
+                              value: _rootPlateStabilityFactor,
+                              min: 0.3,
+                              max: 1.0,
+                              divisions: 7,
+                              activeColor: _rootPlateStabilityFactor >= 0.7 ? Colors.green : Colors.orange,
+                              onChanged: (v) => setState(() => _rootPlateStabilityFactor = v),
+                            ),
+                          ),
+                          SizedBox(width: 40, child: Text('${(_rootPlateStabilityFactor * 100).toStringAsFixed(0)}%')),
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          Checkbox(
+                            value: _hasRootDamage,
+                            visualDensity: VisualDensity.compact,
+                            onChanged: (v) => setState(() => _hasRootDamage = v ?? false),
+                          ),
+                          const Text('Root damage', style: TextStyle(fontSize: 13)),
+                          const SizedBox(width: 12),
+                          Checkbox(
+                            value: _hasHeaving,
+                            visualDensity: VisualDensity.compact,
+                            onChanged: (v) => setState(() => _hasHeaving = v ?? false),
+                          ),
+                          const Text('Heaving/cracks', style: TextStyle(fontSize: 13)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const Divider(),
             ],
             
@@ -3283,6 +3364,11 @@ class _LiveWindLoadSimulatorState extends State<LiveWindLoadSimulator>
                       crownReductionPercent: _crownReductionPercent,
                       cavityType: _cavityType,
                       cavityOpeningAngle: _cavityOpeningAngle,
+                      showRootPlate: _showRootPlate,
+                      rootPlateStabilityFactor: _rootPlateStabilityFactor,
+                      soilType: _soilType,
+                      hasRootDamage: _hasRootDamage,
+                      hasHeaving: _hasHeaving,
                     ),
                   );
                 },
@@ -3828,6 +3914,13 @@ class _RealisticTreePainter extends CustomPainter {
   final double crownReductionPercent;
   final int cavityType; // 0=closed, 1=open, 2=pipe
   final double cavityOpeningAngle;
+  
+  // Root plate parameters
+  final bool showRootPlate;
+  final double rootPlateStabilityFactor;
+  final String soilType;
+  final bool hasRootDamage;
+  final bool hasHeaving;
 
   _RealisticTreePainter({
     required this.dbhCm,
@@ -3855,6 +3948,11 @@ class _RealisticTreePainter extends CustomPainter {
     this.crownReductionPercent = 20.0,
     this.cavityType = 0,
     this.cavityOpeningAngle = 90.0,
+    this.showRootPlate = false,
+    this.rootPlateStabilityFactor = 1.0,
+    this.soilType = 'clay_loam',
+    this.hasRootDamage = false,
+    this.hasHeaving = false,
   });
 
   @override
@@ -4095,8 +4193,13 @@ class _RealisticTreePainter extends CustomPainter {
   }
 
   void _drawRoots(Canvas canvas, double centerX, double groundY, double stemWidth) {
+    // Draw root plate visualization if enabled
+    if (showRootPlate) {
+      _drawRootPlate(canvas, centerX, groundY, stemWidth);
+    }
+    
     final rootPaint = Paint()
-      ..color = Colors.brown.shade800
+      ..color = hasRootDamage ? Colors.brown.shade400 : Colors.brown.shade800
       ..strokeWidth = stemWidth * 0.3
       ..strokeCap = StrokeCap.round;
     
@@ -4106,8 +4209,112 @@ class _RealisticTreePainter extends CustomPainter {
       final endX = centerX + math.sin(rad) * length;
       final endY = groundY + math.cos(rad) * length * 0.4;
       
-      canvas.drawLine(Offset(centerX, groundY), Offset(endX, endY), rootPaint);
+      // Draw damaged root indicator
+      if (hasRootDamage && angle.abs() < 40) {
+        final damagedPaint = Paint()
+          ..color = Colors.red.shade400
+          ..strokeWidth = stemWidth * 0.15
+          ..strokeCap = StrokeCap.round;
+        canvas.drawLine(Offset(centerX, groundY), Offset(endX * 0.7 + centerX * 0.3, endY), damagedPaint);
+      } else {
+        canvas.drawLine(Offset(centerX, groundY), Offset(endX, endY), rootPaint);
+      }
     }
+  }
+
+  void _drawRootPlate(Canvas canvas, double centerX, double groundY, double stemWidth) {
+    final plateRadius = stemWidth * 4;
+    final plateDepth = 25.0;
+    
+    // Soil color based on type
+    Color soilColor;
+    switch (soilType) {
+      case 'sandy':
+        soilColor = const Color(0xFFD4A574);
+        break;
+      case 'clay':
+        soilColor = const Color(0xFF8B6914);
+        break;
+      case 'organic':
+        soilColor = const Color(0xFF3D2914);
+        break;
+      case 'rocky':
+        soilColor = const Color(0xFF7A7A7A);
+        break;
+      default:
+        soilColor = const Color(0xFF6B4423);
+    }
+    
+    // Draw soil cross-section (semi-circle below ground)
+    final soilPath = Path();
+    soilPath.moveTo(centerX - plateRadius, groundY);
+    soilPath.arcTo(
+      Rect.fromCenter(center: Offset(centerX, groundY), width: plateRadius * 2, height: plateDepth * 2),
+      math.pi, math.pi, false,
+    );
+    soilPath.close();
+    
+    final soilPaint = Paint()
+      ..color = soilColor.withOpacity(0.6)
+      ..style = PaintingStyle.fill;
+    canvas.drawPath(soilPath, soilPaint);
+    
+    // Draw root plate outline
+    final platePaint = Paint()
+      ..color = rootPlateStabilityFactor >= 0.7 ? Colors.brown.shade600 : Colors.orange.shade700
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+    canvas.drawPath(soilPath, platePaint);
+    
+    // Draw heaving/cracking if present
+    if (hasHeaving) {
+      final crackPaint = Paint()
+        ..color = Colors.red.shade700
+        ..strokeWidth = 2
+        ..style = PaintingStyle.stroke;
+      
+      // Draw crack lines radiating from base
+      for (var i = 0; i < 3; i++) {
+        final offset = (i - 1) * 15.0;
+        final path = Path();
+        path.moveTo(centerX + offset, groundY);
+        path.lineTo(centerX + offset - 5, groundY - 8);
+        path.moveTo(centerX + offset, groundY);
+        path.lineTo(centerX + offset + 3, groundY - 6);
+        canvas.drawPath(path, crackPaint);
+      }
+      
+      // Heaving indicator - raised soil
+      final heavePaint = Paint()
+        ..color = soilColor
+        ..style = PaintingStyle.fill;
+      final heavePath = Path();
+      heavePath.moveTo(centerX - plateRadius * 0.8, groundY);
+      heavePath.quadraticBezierTo(centerX - plateRadius * 0.4, groundY - 8, centerX, groundY - 3);
+      heavePath.quadraticBezierTo(centerX + plateRadius * 0.4, groundY - 8, centerX + plateRadius * 0.8, groundY);
+      heavePath.close();
+      canvas.drawPath(heavePath, heavePaint);
+    }
+    
+    // Draw stability indicator
+    final indicatorColor = rootPlateStabilityFactor >= 0.9 ? Colors.green
+        : rootPlateStabilityFactor >= 0.7 ? Colors.yellow.shade700
+        : rootPlateStabilityFactor >= 0.5 ? Colors.orange
+        : Colors.red;
+    
+    final indicatorPaint = Paint()
+      ..color = indicatorColor
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(centerX - plateRadius - 10, groundY + 15), 6, indicatorPaint);
+    
+    // Label
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+    textPainter.text = TextSpan(
+      text: 'Root: ${(rootPlateStabilityFactor * 100).toStringAsFixed(0)}%',
+      style: TextStyle(fontSize: 9, color: indicatorColor, fontWeight: FontWeight.bold),
+    );
+    textPainter.layout();
+    textPainter.paint(canvas, Offset(centerX - plateRadius - 10 - textPainter.width / 2, groundY + 25));
   }
 
   void _drawStem(Canvas canvas, double baseX, double groundY, double height, 
