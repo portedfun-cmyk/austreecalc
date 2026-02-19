@@ -1,18 +1,20 @@
+# Build Flutter app for main site
 [build]
   command = "flutter build web --release"
   publish = "build/web"
 
-# Bayside Permit App redirect
+# Bayside Permit App - serve simple HTML file
 [[redirects]]
   from = "/bayside-permit"
-  to = "/bayside-permit/index.html"
+  to = "/web/bayside-permit-simple.html"
   status = 200
 
 [[redirects]]
   from = "/bayside-permit/*"
-  to = "/bayside-permit/index.html"
+  to = "/web/bayside-permit-simple.html"
   status = 200
 
+# Flutter app redirects (main site)
 [[redirects]]
   from = "/*"
   to = "/index.html"
