@@ -2,6 +2,17 @@
   command = "flutter build web --release"
   publish = "build/web"
 
+# Bayside Permit App redirect
+[[redirects]]
+  from = "/bayside-permit"
+  to = "/bayside-permit/index.html"
+  status = 200
+
+[[redirects]]
+  from = "/bayside-permit/*"
+  to = "/bayside-permit/index.html"
+  status = 200
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
